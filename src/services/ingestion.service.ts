@@ -17,7 +17,11 @@ import {
   csvRowToPatient,
   zodIssuesToDiagnostics,
 } from "../lib/mappers";
-import { csvRowSchema, type ParsedCsvRow } from "../lib/validation";
+import {
+  csvRowSchema,
+  type BatchRequest,
+  type ParsedCsvRow,
+} from "../lib/validation";
 
 const CHUNK_SIZE = 500;
 const DIAGNOSTIC_LIMIT = 1000;
@@ -148,3 +152,73 @@ export async function ingestHistoricalCsv(
   };
 }
 
+interface BatchSummary {
+  received: number;
+  inserted: number;
+  rejected: number;
+}
+
+export interface BatchResult extends DiagnosticsReport {
+  summary: BatchSummary;
+}
+
+// Batch endpoint contract: patient_id MUST already exist (rejected with a
+// row-level diagnostic if not), neighbourhood is upserted by name. The whole
+// payload runs in a single transaction so a mid-batch failure rolls back.
+export async function ingestBatch(input: BatchRequest): Promise<BatchResult> {
+  const diagnostics = new DiagnosticsCollector(DIAGNOSTIC_LIMIT);
+  const received = input.appointments.length;
+
+  return db.transaction(async (tx) => {
+    const neighbourhoodMap = await upsertNeighbourhoods(
+      tx,
+      input.appointments.map((a) => a.neighbourhood),
+    );
+
+    const patientIds = [...new Set(input.appointments.map((a) => a.patient_id))];
+    const knownPatients = await tx
+      .select({ id: patientsTable.patientId })
+      .from(patientsTable)
+      .where(inArray(patientsTable.patientId, patientIds));
+    const knownPatientSet = new Set(knownPatients.map((p) => p.id));
+
+    const toInsert: NewAppointment[] = [];
+    input.appointments.forEach((row, index) => {
+      const rowNumber = index + 1;
+      if (!knownPatientSet.has(row.patient_id)) {
+        diagnostics.add({
+          row: rowNumber,
+          field: "patient_id",
+          value: row.patient_id,
+          error: "patient_id does not exist",
+        });
+        return;
+      }
+      const neighbourhoodId = neighbourhoodMap.get(row.neighbourhood);
+      if (neighbourhoodId === undefined) {
+        diagnostics.add({
+          row: rowNumber,
+          field: "neighbourhood",
+          value: row.neighbourhood,
+          error: "neighbourhood upsert failed",
+        });
+        return;
+      }
+      toInsert.push({
+        appointmentId: row.appointment_id,
+        patientId: row.patient_id,
+        neighbourhoodId,
+        scheduledAt: row.scheduled_at,
+        appointmentAt: row.appointment_at,
+        smsReceived: row.sms_received,
+        noShow: row.no_show,
+      });
+    });
+
+    const inserted = await insertAppointments(tx, toInsert);
+    return {
+      summary: { received, inserted, rejected: received - inserted },
+      ...diagnostics.report(),
+    };
+  });
+}
