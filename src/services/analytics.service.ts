@@ -66,3 +66,47 @@ export async function noShowsByQuarter(
   }));
 }
 
+export interface AboveAverageNoShowsRow {
+  id: number;
+  neighbourhood: string;
+  no_shows: number;
+}
+
+// Requirement 4.2: neighbourhoods whose no-show count exceeds the mean across
+// all neighbourhoods for the given year. The CTE computes the per-neighbourhood
+// totals once; the subquery reuses them to compute the threshold (avoids a
+// second pass over `appointments`).
+export async function aboveAverageNoShows(
+  year: number | undefined,
+): Promise<AboveAverageNoShowsRow[]> {
+  const targetYear = await resolveYear(year);
+  if (targetYear === null) return [];
+
+  const rows = await db.execute<{
+    id: number;
+    neighbourhood: string;
+    no_shows: string;
+  }>(sql`
+    WITH per_neighbourhood AS (
+      SELECT
+        n.neighbourhood_id AS id,
+        n.name AS neighbourhood,
+        COUNT(*) AS no_shows
+      FROM appointments a
+      JOIN neighbourhoods n ON n.neighbourhood_id = a.neighbourhood_id
+      WHERE a.no_show = true
+        AND EXTRACT(YEAR FROM a.appointment_at) = ${targetYear}
+      GROUP BY n.neighbourhood_id, n.name
+    )
+    SELECT id, neighbourhood, no_shows
+    FROM per_neighbourhood
+    WHERE no_shows > (SELECT AVG(no_shows) FROM per_neighbourhood)
+    ORDER BY no_shows DESC
+  `);
+
+  return rows.map((r) => ({
+    id: r.id,
+    neighbourhood: r.neighbourhood,
+    no_shows: Number(r.no_shows),
+  }));
+}
