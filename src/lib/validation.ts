@@ -48,10 +48,19 @@ export const csvRowSchema = z
     SMS_received: binaryFlag,
     "No-show": z.enum(["Yes", "No"]).transform((value) => value === "Yes"),
   })
-  .refine((row) => row.ScheduledDay <= row.AppointmentDay, {
-    message: "ScheduledDay must be on or before AppointmentDay",
-    path: ["ScheduledDay"],
-  });
+  // `AppointmentDay` in the source CSV is always at 00:00:00 UTC while
+  // `ScheduledDay` carries the booking time-of-day. Comparing the full
+  // timestamps would reject almost every same-day booking. The logical
+  // invariant is "scheduled on or before the appointment *date*".
+  .refine(
+    (row) =>
+      row.ScheduledDay.toISOString().slice(0, 10) <=
+      row.AppointmentDay.toISOString().slice(0, 10),
+    {
+      message: "ScheduledDay must be on or before AppointmentDay",
+      path: ["ScheduledDay"],
+    },
+  );
 
 export type ParsedCsvRow = z.infer<typeof csvRowSchema>;
 
