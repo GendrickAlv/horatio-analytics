@@ -3,12 +3,19 @@ import { batchRequestSchema, yearQuerySchema } from "./lib/validation";
 
 // Derive JSON Schemas from the same Zod schemas the runtime validators use, so
 // the spec cannot drift from the wire contract. Zod 4 emits draft-2020-12
-// (OpenAPI 3.1 is a superset of it).
+// (OpenAPI 3.1 is a superset of it). `io: "input"` documents the shape the
+// client sends over the wire (e.g. `sms_received` as 0/1) rather than the
+// post-transform domain shape — the latter is internal to the service.
+// `unrepresentable: "any"` is a safety net for any future transform we add.
 const batchRequestJsonSchema = z.toJSONSchema(batchRequestSchema, {
   target: "draft-2020-12",
+  io: "input",
+  unrepresentable: "any",
 });
 const yearQueryJsonSchema = z.toJSONSchema(yearQuerySchema, {
   target: "draft-2020-12",
+  io: "input",
+  unrepresentable: "any",
 });
 
 const diagnosticSchema = {
