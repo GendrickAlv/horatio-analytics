@@ -137,14 +137,36 @@ describe("DB-free endpoints", () => {
   const ajv = buildAjv();
   registerComponents(ajv);
 
-  it("GET /api/health response shape", () => {
+  it("GET /api/health 200 response shape", () => {
     const validate = compileResponseValidator(ajv, {
       path: "/api/health",
       method: "get",
       status: "200",
     });
-    expect(validate({ status: "ok" }), formatErrors(validate)).toBe(true);
+    expect(
+      validate({ status: "ok", checks: { database: "ok" } }),
+      formatErrors(validate),
+    ).toBe(true);
     // Wrong literal must fail.
-    expect(validate({ status: "not-ok" })).toBe(false);
+    expect(validate({ status: "degraded", checks: { database: "ok" } })).toBe(
+      false,
+    );
+    // Missing checks must fail.
+    expect(validate({ status: "ok" })).toBe(false);
+  });
+
+  it("GET /api/health 503 response shape", () => {
+    const validate = compileResponseValidator(ajv, {
+      path: "/api/health",
+      method: "get",
+      status: "503",
+    });
+    expect(
+      validate({ status: "degraded", checks: { database: "unreachable" } }),
+      formatErrors(validate),
+    ).toBe(true);
+    expect(
+      validate({ status: "ok", checks: { database: "unreachable" } }),
+    ).toBe(false);
   });
 });

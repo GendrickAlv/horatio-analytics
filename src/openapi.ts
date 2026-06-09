@@ -108,16 +108,50 @@ export const openApiDocument = {
   paths: {
     "/api/health": {
       get: {
-        summary: "Liveness probe",
+        summary: "Liveness and readiness probe",
+        description:
+          "Returns 200 only when the Postgres pool can serve a trivial " +
+          "query. Returns 503 with a `degraded` status if the database is " +
+          "unreachable — orchestrators should rotate the instance out.",
         responses: {
           "200": {
-            description: "Service is up.",
+            description: "Service is up and the database is reachable.",
             content: {
               "application/json": {
                 schema: {
                   type: "object",
-                  required: ["status"],
-                  properties: { status: { type: "string", enum: ["ok"] } },
+                  required: ["status", "checks"],
+                  properties: {
+                    status: { type: "string", enum: ["ok"] },
+                    checks: {
+                      type: "object",
+                      required: ["database"],
+                      properties: {
+                        database: { type: "string", enum: ["ok"] },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "503": {
+            description: "Database is unreachable.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["status", "checks"],
+                  properties: {
+                    status: { type: "string", enum: ["degraded"] },
+                    checks: {
+                      type: "object",
+                      required: ["database"],
+                      properties: {
+                        database: { type: "string", enum: ["unreachable"] },
+                      },
+                    },
+                  },
                 },
               },
             },
