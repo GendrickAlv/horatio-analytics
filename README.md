@@ -224,6 +224,29 @@ This builds the app image (multi-stage, Next.js standalone output) and starts
 both `postgres` and `app` containers. Migrations still need to be applied once
 from the host (`npm run db:migrate`) or by exec'ing into the app container.
 
+### Troubleshooting
+
+- **`password authentication failed for user "horatio"`** — a native
+  PostgreSQL install is already bound to port 5432 and intercepts the
+  connection before the container does. Drop a local
+  `docker-compose.override.yml` (already gitignored) that re-maps the host
+  port:
+
+  ```yaml
+  services:
+    postgres:
+      ports:
+        - "5433:5432"
+  ```
+
+  Then update `DATABASE_URL` in `.env.local` to point to `:5433`.
+
+- **`npm run db:migrate` appears to hang** — the spinner stays on screen
+  if the public schema already contains the tables (e.g. someone applied
+  the SQL manually). Drop the schema (`DROP SCHEMA public CASCADE; CREATE
+  SCHEMA public;`) and rerun. On a fresh database the command completes
+  in under a second.
+
 ---
 
 ## 6. Tests
