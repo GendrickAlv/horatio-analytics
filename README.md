@@ -1,36 +1,235 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Horatio Analytics
 
-## Getting Started
+REST API that ingests the Kaggle *Medical Appointment No Shows* dataset (both
+as a historical CSV and as JSON batches) and exposes analytics over no-show
+behaviour by neighbourhood, gender and quarter.
 
-First, run the development server:
+Built for the Horatio Data Engineering take-home challenge.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+---
+
+## 1. Stack and rationale
+
+| Layer | Choice | Why |
+|---|---|---|
+| Framework | **Next.js 15 (App Router)** | One deployable for API + future dashboard; Route Handlers are a thin REST surface with zero extra plumbing. *It is Next.js, not NestJS.* |
+| Language | **TypeScript (`strict`)** | Type-safety from CSV row to SQL parameter. |
+| Database | **PostgreSQL 16** | First-class window/aggregation functions for the analytics queries. |
+| ORM / queries | **Drizzle ORM** | Schema-first migrations, fully-parametrised query builder, and the `sql` template tag for the two analytics queries — every query is parametrised, satisfying [RSPEC-2077](https://rules.sonarsource.com/typescript/RSPEC-2077/). |
+| Validation | **Zod 4** | One schema drives runtime validation, derived TypeScript types, and the OpenAPI document (`z.toJSONSchema`). |
+| CSV | **`csv-parse`** in streaming mode | The historical file has ~110k rows; streaming keeps memory flat. |
+| Tests | **Vitest + Supertest-style fetch** | Same runtime as the app; serial integration suite shares one Postgres. |
+| Containers | **Dockerfile + docker-compose** | Single-command local bring-up. |
+| CI | **GitHub Actions** | Lint, typecheck and tests on every push to `main` or PR. |
+| Logs | **`pino`** | Structured JSON logs without a runtime transport (clean for container stdout). |
+| OpenAPI | **Zod-derived spec at `/api/openapi`** | Spec cannot drift from the validators. |
+
+---
+
+## 2. Data model
+
+Three normalised tables:
+
+```mermaid
+erDiagram
+    PATIENTS ||--o{ APPOINTMENTS : has
+    NEIGHBOURHOODS ||--o{ APPOINTMENTS : located_in
+
+    PATIENTS {
+        bigint   patient_id PK
+        char(1)  gender
+        smallint year_of_birth
+        boolean  scholarship
+        boolean  hypertension
+        boolean  diabetes
+        boolean  alcoholism
+        smallint handcap "0..4 severity"
+    }
+
+    NEIGHBOURHOODS {
+        serial neighbourhood_id PK
+        text   name UK
+    }
+
+    APPOINTMENTS {
+        bigint      appointment_id PK
+        bigint      patient_id FK
+        int         neighbourhood_id FK
+        timestamptz scheduled_at
+        timestamptz appointment_at
+        boolean     sms_received
+        boolean     no_show
+    }
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Indexes on `appointments`:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- `(appointment_at)` — quick year/quarter scans
+- `(patient_id)` — patient look-ups
+- `(neighbourhood_id)` — joins to the lookup table
+- `(appointment_at, no_show, neighbourhood_id)` — composite index sized for
+  both analytics queries (year filter → no-show filter → group by neighbourhood)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Transformations applied during ingestion
 
-## Learn More
+| Source column | Destination | Notes |
+|---|---|---|
+| `Age` + `AppointmentDay` | `year_of_birth` | Derived **once per patient**: `year(AppointmentDay) - Age`. Approximate ±1 year — documented and accepted. |
+| `Hipertension` (CSV typo) | `hypertension` | Renamed. |
+| `Handcap` | `handcap` (`smallint`) | Kept as severity `0..4`, **not** boolean. |
+| `No-show` `"Yes"/"No"` | `no_show` (`boolean`) | `Yes ⇒ true`. |
+| `Scholarship`, `Diabetes`, `Alcoholism`, `SMS_received` `0/1` | booleans | |
+| `Neighbourhood` (string) | `neighbourhood_id` (FK) | Upsert by name, dedup via surrogate key. |
+| `PatientId` (repeated per appointment) | `patients` row | Upsert; first row wins per `patient_id`. |
 
-To learn more about Next.js, take a look at the following resources:
+---
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 3. Endpoints
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+All endpoints return JSON. The full machine-readable spec is at
+[`/api/openapi`](http://localhost:3000/api/openapi).
 
-## Deploy on Vercel
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/health` | Liveness probe. |
+| `POST` | `/api/ingest/historical` | Streaming CSV upload (`multipart/form-data`, field `file`). |
+| `POST` | `/api/appointments/batch` | JSON batch of 1..1000 appointments. |
+| `GET` | `/api/analytics/no-shows-by-quarter?year=YYYY` | Requirement 4.1. |
+| `GET` | `/api/analytics/above-average-no-shows?year=YYYY` | Requirement 4.2. |
+| `GET` | `/api/openapi` | OpenAPI 3.1 document. |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Analysis year — default rule
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+When `?year` is omitted the API uses the **latest calendar year present in
+`appointments`** (`EXTRACT(YEAR FROM MAX(appointment_at))`). If the fact table
+is empty both analytics endpoints return `[]`.
+
+### Dirty-row policy
+
+Historical ingestion and batch insertion are **best-effort with row-level
+diagnostics**. Valid rows are persisted; invalid ones are skipped and reported.
+
+```jsonc
+{
+  "summary": { "received": 110527, "inserted": 110480, "skipped": 47 },
+  "diagnostics": [
+    { "row": 153, "field": "Gender", "value": "X", "error": "must be 'M' or 'F'" }
+  ],
+  "truncated": false
+}
+```
+
+Diagnostics are capped at the first **1000** entries; the response carries
+`"truncated": true` past that point.
+
+### FK / transaction policy
+
+- **Historical CSV** — neighbourhoods and patients are upserted before
+  appointments. Each ~500-row chunk runs in its own transaction so a transient
+  failure rolls back only the affected chunk, not the whole file.
+- **Batch endpoint** — the entire batch runs in a single transaction.
+  `patient_id` **must already exist**; non-existent patients yield a row-level
+  diagnostic rather than a silent insert. `neighbourhood` is upserted by name.
+
+---
+
+## 4. Running locally
+
+### Prerequisites
+
+- Node.js 20+
+- Docker + Docker Compose
+
+### One-shot bring-up
+
+```bash
+docker compose up -d postgres        # start Postgres
+cp .env.example .env.local           # set DATABASE_URL
+npm ci
+npm run db:migrate                   # apply Drizzle migrations
+npm run dev                          # http://localhost:3000
+```
+
+### Loading the historical CSV
+
+Download the Kaggle file to `data/appointments.csv` (gitignored), then:
+
+```bash
+curl -X POST http://localhost:3000/api/ingest/historical \
+  -F "file=@data/appointments.csv"
+```
+
+### Running the whole stack in Docker
+
+```bash
+docker compose up --build
+```
+
+This builds the app image (multi-stage, Next.js standalone output) and starts
+both `postgres` and `app` containers. Migrations still need to be applied once
+from the host (`npm run db:migrate`) or by exec'ing into the app container.
+
+---
+
+## 5. Tests
+
+```bash
+npm test           # one-shot run
+npm run test:watch # watch mode
+```
+
+- **Unit** — Zod schemas, CSV mappers, the diagnostics collector.
+- **Integration** — full ingestion + analytics pipelines against a real
+  Postgres. The integration suite runs **serially** and shares one database;
+  set `DATABASE_URL` to a disposable instance (the docker-compose `postgres`
+  service is the intended target). Integration tests skip automatically when
+  `DATABASE_URL` is not set.
+
+---
+
+## 6. Project layout
+
+```
+.
+├─ app/api/                  # Route handlers (thin — they delegate to services)
+│  ├─ health/
+│  ├─ ingest/historical/
+│  ├─ appointments/batch/
+│  ├─ analytics/no-shows-by-quarter/
+│  ├─ analytics/above-average-no-shows/
+│  └─ openapi/
+├─ src/
+│  ├─ db/                    # Drizzle schema, client, migrations
+│  ├─ lib/                   # CSV streamer, Zod schemas, mappers, diagnostics, logger
+│  ├─ services/              # Business logic (ingestion, analytics)
+│  └─ openapi.ts             # OpenAPI 3.1 document
+├─ tests/
+│  ├─ unit/
+│  └─ integration/
+├─ data/                     # CSV uploads (gitignored except a sample)
+├─ docker-compose.yml
+├─ Dockerfile
+└─ .github/workflows/ci.yml
+```
+
+---
+
+## 7. Architecture notes
+
+- **Route handlers are thin.** Each handler parses the request boundary
+  (multipart, JSON, query string) with Zod and delegates to a service. All
+  business logic lives in `src/services/`.
+- **Every SQL query is parametrised.** Drizzle's query builder and the `sql`
+  template both bind values as parameters — no string concatenation anywhere.
+- **One source of truth for shapes.** Zod schemas drive runtime validation,
+  TypeScript types (`z.infer`), and the OpenAPI document (`z.toJSONSchema`).
+
+---
+
+## 8. Deployment
+
+The Dockerfile produces a self-contained Next.js standalone server suitable for
+any container host (Railway, Fly, Render, Vercel container deploy, GCP Cloud
+Run, …). Set `DATABASE_URL` and the container will boot.
+
+A live URL, if deployed, will be added at the top of this README.
