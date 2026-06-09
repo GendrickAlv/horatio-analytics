@@ -256,12 +256,17 @@ npm test           # one-shot run
 npm run test:watch # watch mode
 ```
 
-- **Unit** — Zod schemas, CSV mappers, the diagnostics collector.
+- **Unit** — Zod schemas, CSV mappers, diagnostics collector, request-size
+  guard.
 - **Integration** — full ingestion + analytics pipelines against a real
   Postgres. The integration suite runs **serially** and shares one database;
   set `DATABASE_URL` to a disposable instance (the docker-compose `postgres`
   service is the intended target). Integration tests skip automatically when
   `DATABASE_URL` is not set.
+- **Contract** — uses AJV to validate that each service's response shape
+  matches the JSON Schema declared in `src/openapi.ts`. Catches drift
+  between the OpenAPI document and runtime behaviour. DB-dependent contract
+  cases skip with the same gate as the integration suite.
 
 ---
 
@@ -283,7 +288,8 @@ npm run test:watch # watch mode
 │  └─ openapi.ts             # OpenAPI 3.1 document
 ├─ tests/
 │  ├─ unit/
-│  └─ integration/
+│  ├─ integration/
+│  └─ contract/              # AJV-driven response shape checks against the spec
 ├─ data/                     # CSV uploads (gitignored except a sample)
 ├─ docker-compose.yml
 ├─ Dockerfile
@@ -305,7 +311,55 @@ npm run test:watch # watch mode
 
 ---
 
-## 9. Deployment
+## 9. Security considerations
+
+What the service does today, and what a production deployment would still
+need.
+
+**Already in place**
+
+- **Parametrised SQL everywhere.** Drizzle's query builder and the `sql`
+  template bind every value as a parameter — RSPEC-2077, no string-concat
+  SQL anywhere in the codebase.
+- **Edge validation.** Every request body — CSV row, batch payload, query
+  string — goes through a Zod schema before reaching a service. Invalid
+  input is rejected with a 4xx and a row-level diagnostic.
+- **Request-size limits.** Ingestion routes inspect `Content-Length` and
+  return `413 Payload Too Large` over the cap (200 MB for the historical
+  CSV, 5 MB for batches). Limits live in `src/lib/security.ts`.
+- **Defence-in-depth response headers.** A root `middleware.ts` sets
+  `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and HSTS
+  (production only) on every response.
+- **Container hardening.** The runtime image runs as a dedicated
+  non-root `nextjs` user; the `DATABASE_URL` placeholder used during
+  `next build` is discarded at the next `FROM` line and never reaches
+  runtime.
+- **Secrets stay out of the repo.** `.env*` is gitignored except for
+  `.env.example`; the only credentials in the Dockerfile are
+  build-only placeholders.
+
+**Intentionally deferred for the take-home scope** (would ship before
+exposing the API to anything other than `localhost`)
+
+- **No authentication or authorisation.** Anyone reachable on
+  `localhost:3000` can ingest, mutate, and read. Production would gate
+  every route behind an API key or JWT and an RBAC layer at the route
+  handler.
+- **No rate limiting.** A reverse proxy (Nginx, Cloudflare) or a per-route
+  middleware (e.g. `next-rate-limit`) would cap requests per IP and per
+  token.
+- **No audit log.** pino logs ingest summaries but not the caller
+  identity; that requires the auth layer above to land first.
+- **Raw values in diagnostics.** The `Diagnostic.value` field echoes the
+  rejected field as-is. Synthetic dataset = no PII to leak, but on real
+  data we would redact or hash.
+- **No request body streaming size cap.** `Content-Length` is a
+  best-effort signal — a malicious client can omit it. Production would
+  enforce the cap inside the CSV stream parser as well.
+
+---
+
+## 10. Deployment
 
 The Dockerfile produces a self-contained Next.js standalone server suitable for
 any container host (Railway, Fly, Render, Vercel container deploy, GCP Cloud

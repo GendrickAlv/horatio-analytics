@@ -2,10 +2,19 @@ import { NextResponse } from "next/server";
 import { ingestBatch } from "@/src/services/ingestion.service";
 import { batchRequestSchema } from "@/src/lib/validation";
 import { zodIssuesToDiagnostics } from "@/src/lib/mappers";
+import { MAX_BATCH_BYTES, checkBodySize } from "@/src/lib/security";
 
 export const runtime = "nodejs";
 
 export async function POST(request: Request): Promise<Response> {
+  const sizeCheck = checkBodySize(request, MAX_BATCH_BYTES);
+  if (!sizeCheck.ok) {
+    return NextResponse.json(
+      { error: sizeCheck.error },
+      { status: sizeCheck.status },
+    );
+  }
+
   let body: unknown;
   try {
     body = await request.json();

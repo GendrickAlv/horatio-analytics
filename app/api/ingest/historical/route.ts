@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { ingestHistoricalCsv } from "@/src/services/ingestion.service";
+import { MAX_HISTORICAL_BYTES, checkBodySize } from "@/src/lib/security";
 
 // Node runtime is required: we use the `postgres` driver and Node streams.
 export const runtime = "nodejs";
@@ -7,6 +8,14 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 export async function POST(request: Request): Promise<Response> {
+  const sizeCheck = checkBodySize(request, MAX_HISTORICAL_BYTES);
+  if (!sizeCheck.ok) {
+    return NextResponse.json(
+      { error: sizeCheck.error },
+      { status: sizeCheck.status },
+    );
+  }
+
   const contentType = request.headers.get("content-type") ?? "";
   if (!contentType.toLowerCase().includes("multipart/form-data")) {
     return NextResponse.json(
