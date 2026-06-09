@@ -309,6 +309,11 @@ npm run test:watch # watch mode
 - **One source of truth for shapes.** Zod schemas drive runtime validation,
   TypeScript types (`z.infer`), and the OpenAPI document (`z.toJSONSchema`).
 
+The load-bearing choices behind these principles have short Architecture
+Decision Records under [`docs/decisions/`](./docs/decisions/) — one for
+the framework, the ORM, the streaming/chunked-transaction strategy, and
+the best-effort-with-diagnostics ingestion policy.
+
 ---
 
 ## 9. Security considerations
