@@ -17,5 +17,21 @@ services:
       timeout: 5s
       retries: 10
 
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: horatio-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://horatio:horatio@postgres:5432/horatio
+      LOG_LEVEL: info
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+
 volumes:
   postgres_data:

@@ -17,6 +17,7 @@ import {
   csvRowToPatient,
   zodIssuesToDiagnostics,
 } from "../lib/mappers";
+import { logger } from "../lib/logger";
 import {
   csvRowSchema,
   type BatchRequest,
@@ -146,10 +147,9 @@ export async function ingestHistoricalCsv(
     inserted += await flushChunk(chunk);
   }
 
-  return {
-    summary: { received, inserted, skipped },
-    ...diagnostics.report(),
-  };
+  const summary = { received, inserted, skipped };
+  logger.info({ summary, kind: "historical" }, "ingest complete");
+  return { summary, ...diagnostics.report() };
 }
 
 interface BatchSummary {
@@ -216,9 +216,8 @@ export async function ingestBatch(input: BatchRequest): Promise<BatchResult> {
     });
 
     const inserted = await insertAppointments(tx, toInsert);
-    return {
-      summary: { received, inserted, rejected: received - inserted },
-      ...diagnostics.report(),
-    };
+    const summary = { received, inserted, rejected: received - inserted };
+    logger.info({ summary, kind: "batch" }, "ingest complete");
+    return { summary, ...diagnostics.report() };
   });
 }
