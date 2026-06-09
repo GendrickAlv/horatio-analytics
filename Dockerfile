@@ -10,6 +10,11 @@ RUN npm ci
 FROM node:20-alpine AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
+# `next build` evaluates server modules to collect route metadata. The DB
+# client refuses to load without DATABASE_URL — a placeholder is enough
+# because `postgres-js` connects lazily on first query, not at module init.
+# This value is discarded at the end of this stage and never reaches runtime.
+ENV DATABASE_URL=postgresql://buildtime:buildtime@localhost:5432/buildtime
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
