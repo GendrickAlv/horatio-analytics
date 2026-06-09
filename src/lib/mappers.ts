@@ -1,6 +1,6 @@
 import type { z } from "zod";
 import type { NewAppointment, NewPatient } from "../db/schema";
-import type { ParsedCsvRow, csvRowSchema } from "./validation";
+import type { ParsedCsvRow } from "./validation";
 import type { RowDiagnostic } from "./diagnostics";
 
 // Convert a Zod issue tree into one diagnostic per failed field.
