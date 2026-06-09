@@ -84,7 +84,52 @@ Indexes on `appointments`:
 
 ---
 
-## 3. Endpoints
+## 3. Architecture
+
+A single Next.js process serves both the REST API and the data-quality
+dashboard at `/`. Route Handlers are deliberately thin — they parse the
+request boundary and delegate to a service. All business logic lives in
+`src/services/`; all SQL goes through Drizzle, parametrised by construction.
+
+```mermaid
+flowchart LR
+    Client(["HTTP client<br/>curl, dashboard at /"])
+    Dashboard["app/page.tsx<br/>(server component)"]
+    Routes["Route Handlers<br/>app/api/**/route.ts"]
+    IngestSvc["ingestion.service.ts"]
+    AnalyticsSvc["analytics.service.ts"]
+    Lib["src/lib<br/>csv-parse · Zod · mappers · diagnostics"]
+    Drizzle[("Drizzle ORM<br/>parametrised SQL")]
+    PG[("PostgreSQL 16")]
+
+    Client -->|HTTP| Routes
+    Client -->|GET /| Dashboard
+    Dashboard -->|server call| AnalyticsSvc
+    Routes -->|POST /ingest, /batch| IngestSvc
+    Routes -->|GET /analytics/*| AnalyticsSvc
+    IngestSvc --> Lib
+    IngestSvc --> Drizzle
+    AnalyticsSvc --> Drizzle
+    Drizzle --> PG
+```
+
+Two ingestion paths funnel through the same `ingestion.service.ts`:
+
+- **Streaming CSV** — `csv-parse` yields one record at a time; Zod validates
+  each; valid rows accumulate into ~500-row chunks and each chunk commits in
+  its own transaction. A bad row never blocks the chunk; a bad chunk never
+  blocks the file.
+- **JSON batch** — the whole payload runs in a single transaction; per-row
+  failures (unknown `patient_id`, validation issues) surface as diagnostics
+  without aborting the batch.
+
+The dashboard reads analytics by calling the service **directly** (no
+self-HTTP) — the same SQL as the public endpoints, just bypassing the
+serialisation hop.
+
+---
+
+## 4. Endpoints
 
 All endpoints return JSON. The full machine-readable spec is at
 [`/api/openapi`](http://localhost:3000/api/openapi).
@@ -133,7 +178,7 @@ Diagnostics are capped at the first **1000** entries; the response carries
 
 ---
 
-## 4. Running locally
+## 5. Running locally
 
 ### Prerequisites
 
@@ -150,9 +195,19 @@ npm run db:migrate                   # apply Drizzle migrations
 npm run dev                          # http://localhost:3000
 ```
 
-### Loading the historical CSV
+### Loading data
 
-Download the Kaggle file to `data/appointments.csv` (gitignored), then:
+A 30-row `data/sample.csv` is committed (25 valid rows + 5 intentionally
+invalid rows to exercise the diagnostics path) so you can smoke-test the
+pipeline without the Kaggle download:
+
+```bash
+curl -X POST http://localhost:3000/api/ingest/historical \
+  -F "file=@data/sample.csv"
+```
+
+For the real dataset, download it from Kaggle to `data/appointments.csv`
+(gitignored) and run:
 
 ```bash
 curl -X POST http://localhost:3000/api/ingest/historical \
@@ -171,7 +226,7 @@ from the host (`npm run db:migrate`) or by exec'ing into the app container.
 
 ---
 
-## 5. Tests
+## 6. Tests
 
 ```bash
 npm test           # one-shot run
@@ -187,7 +242,7 @@ npm run test:watch # watch mode
 
 ---
 
-## 6. Project layout
+## 7. Project layout
 
 ```
 .
@@ -214,19 +269,20 @@ npm run test:watch # watch mode
 
 ---
 
-## 7. Architecture notes
+## 8. Design principles
 
 - **Route handlers are thin.** Each handler parses the request boundary
   (multipart, JSON, query string) with Zod and delegates to a service. All
   business logic lives in `src/services/`.
 - **Every SQL query is parametrised.** Drizzle's query builder and the `sql`
-  template both bind values as parameters — no string concatenation anywhere.
+  template both bind values as parameters — no string concatenation anywhere
+  (RSPEC-2077).
 - **One source of truth for shapes.** Zod schemas drive runtime validation,
   TypeScript types (`z.infer`), and the OpenAPI document (`z.toJSONSchema`).
 
 ---
 
-## 8. Deployment
+## 9. Deployment
 
 The Dockerfile produces a self-contained Next.js standalone server suitable for
 any container host (Railway, Fly, Render, Vercel container deploy, GCP Cloud
