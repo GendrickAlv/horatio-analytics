@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { ingestHistoricalCsv } from "@/src/services/ingestion.service";
+import { CsvHeaderError } from "@/src/lib/csv";
 import { MAX_HISTORICAL_BYTES, checkBodySize } from "@/src/lib/security";
 
 // Node runtime is required: we use the `postgres` driver and Node streams.
@@ -42,6 +43,23 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  const result = await ingestHistoricalCsv(file.stream());
-  return NextResponse.json(result, { status: 200 });
+  try {
+    const result = await ingestHistoricalCsv(file.stream());
+    return NextResponse.json(result, { status: 200 });
+  } catch (cause) {
+    // Header errors are a client fault — respond with a 400 carrying the diff
+    // so the operator can see exactly which columns are wrong without reading
+    // logs.
+    if (cause instanceof CsvHeaderError) {
+      return NextResponse.json(
+        {
+          error: cause.message,
+          missing: cause.missing,
+          unexpected: cause.unexpected,
+        },
+        { status: 400 },
+      );
+    }
+    throw cause;
+  }
 }
