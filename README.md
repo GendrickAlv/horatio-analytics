@@ -82,6 +82,51 @@ Indexes on `appointments`:
 | `Neighbourhood` (string) | `neighbourhood_id` (FK) | Upsert by name, dedup via surrogate key. |
 | `PatientId` (repeated per appointment) | `patients` row | Upsert; first row wins per `patient_id`. |
 
+### Query plans
+
+Both analytics queries run sub-millisecond against the committed `sample.csv`
+(30 rows). The planner makes two different choices depending on selectivity
+— shown by `EXPLAIN (ANALYZE, BUFFERS)`:
+
+```text
+GroupAggregate  (cost=50.89..51.18 rows=6 width=66) (actual time=0.116..0.136 rows=3)
+   Group Key: n.name, p.gender
+   ->  Sort
+         Sort Key: n.name, p.gender
+         ->  Nested Loop
+               ->  Nested Loop
+                     ->  Seq Scan on patients p
+                     ->  Index Scan using appointments_patient_id_idx on appointments a
+                           Index Cond: (patient_id = p.patient_id)
+                           Filter: (no_show AND (EXTRACT(year FROM appointment_at) = '2016'))
+               ->  Index Scan using neighbourhoods_pkey on neighbourhoods n
+ Execution Time: 0.469 ms
+```
+
+```text
+Sort  (actual time=0.191..0.193 rows=1)
+   Sort Key: per_neighbourhood.no_shows DESC
+   CTE per_neighbourhood
+     ->  GroupAggregate
+           Group Key: n.neighbourhood_id
+           ->  Sort
+                 ->  Nested Loop
+                       ->  Seq Scan on appointments a
+                             Filter: (no_show AND (EXTRACT(year FROM appointment_at) = '2016'))
+                       ->  Index Scan using neighbourhoods_pkey on neighbourhoods n
+   InitPlan 2 (returns AVG(no_shows))
+     ->  Aggregate
+           ->  CTE Scan on per_neighbourhood
+ Execution Time: 0.379 ms
+```
+
+At sample scale the planner prefers a sequential scan of `appointments`
+(only 12 no-show rows match the year filter). On the full Kaggle dataset
+(~110 k rows, ~22 % no-show rate) the **composite
+`(appointment_at, no_show, neighbourhood_id)` index** becomes the dominant
+choice for the `WHERE appointment_at … AND no_show` access path — that is
+the case the schema is sized for, and is why the index exists.
+
 ---
 
 ## 3. Architecture
