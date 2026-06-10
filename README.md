@@ -391,8 +391,14 @@ need.
   return `413 Payload Too Large` over the cap (200 MB for the historical
   CSV, 5 MB for batches). Limits live in `src/lib/security.ts`.
 - **Defence-in-depth response headers.** A root `middleware.ts` sets
-  `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and HSTS
-  (production only) on every response.
+  `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, plus
+  HSTS and a strict `Content-Security-Policy` in production. CSP and
+  HSTS are production-only because they would brick the dev HMR loop
+  and plain-HTTP local runs respectively.
+- **N/A by design.** CSRF mitigations are not wired — the API has no
+  cookies, no session, and no browser-side form submission to a
+  different origin. CORS is left at the framework default (same-origin
+  only) because the dashboard ships in the same deployable as the API.
 - **Container hardening.** The runtime image runs as a dedicated
   non-root `nextjs` user; the `DATABASE_URL` placeholder used during
   `next build` is discarded at the next `FROM` line and never reaches
