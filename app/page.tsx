@@ -133,7 +133,7 @@ function YearForm({ currentYear }: { currentYear: number | undefined }): React.R
           min={1900}
           max={2200}
           defaultValue={currentYear ?? ""}
-          placeholder="auto"
+          placeholder="latest"
           className="mt-1 w-28 rounded-md border border-zinc-300 px-2 py-1 font-mono text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
         />
       </label>

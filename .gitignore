@@ -37,6 +37,9 @@ yarn-error.log*
 # docker compose local override (port mappings etc.) — never commit
 docker-compose.override.yml
 
+# local-only editor/preview config
+.claude/
+
 # data files (CSV ingestion; commit only small sample)
 /data/*
 !/data/sample.csv
