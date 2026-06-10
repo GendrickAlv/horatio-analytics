@@ -82,6 +82,26 @@ describeDb("historical ingest + analytics (integration)", () => {
     ]);
   });
 
+  it("is idempotent on appointment_id: re-ingesting the same CSV inserts zero new rows", async () => {
+    const body = [
+      header,
+      "1,10,F,2016-04-01T10:00:00Z,2016-04-02T00:00:00Z,30,CENTRO,0,0,0,0,0,0,Yes",
+      "2,11,M,2016-05-01T10:00:00Z,2016-05-02T00:00:00Z,40,CENTRO,0,0,0,0,0,0,No",
+      "3,12,F,2016-07-01T10:00:00Z,2016-07-02T00:00:00Z,50,NORTE,0,0,0,0,0,0,Yes",
+    ].join("\n");
+
+    const first = await ingestHistoricalCsv(csvStream(body));
+    expect(first.summary).toEqual({ received: 3, inserted: 3, skipped: 0 });
+    expect(first.diagnostics).toEqual([]);
+
+    // Re-submit the exact same body. Every row already exists; no new
+    // diagnostics; insert count drops to zero. This is the contract we
+    // document under §4 Idempotency.
+    const second = await ingestHistoricalCsv(csvStream(body));
+    expect(second.summary).toEqual({ received: 3, inserted: 0, skipped: 0 });
+    expect(second.diagnostics).toEqual([]);
+  });
+
   it("returns only above-average neighbourhoods", async () => {
     // Counts per neighbourhood:
     //   CENTRO: 3 no-shows

@@ -221,6 +221,19 @@ Diagnostics are capped at the first **1000** entries; the response carries
   `patient_id` **must already exist**; non-existent patients yield a row-level
   diagnostic rather than a silent insert. `neighbourhood` is upserted by name.
 
+### Idempotency
+
+Both ingest endpoints are **idempotent on `appointment_id`** — appointments
+are inserted with `ON CONFLICT DO NOTHING` on the primary key. Re-sending
+the same payload after a network timeout is safe: the second call returns
+`200` with `inserted: 0` and no new diagnostics. A client wanting to detect
+a retry can compare `summary.received` to `summary.inserted` and check
+that the diagnostics list is empty.
+
+Patients are also upsert-on-conflict, and neighbourhoods upsert on
+`name` — a duplicated CSV won't create ghost patients or duplicated
+lookups.
+
 ---
 
 ## 5. Running locally
