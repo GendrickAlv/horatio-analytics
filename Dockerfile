@@ -32,7 +32,8 @@ RUN addgroup --system --gid 1001 nodejs \
 
 COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
-COPY --from=build --chown=nextjs:nodejs /app/public ./public
+# No `/app/public` copy: this project ships no static assets, and the directory
+# is dropped by Git when empty, which trips Docker BuildKit's source-exists check.
 
 USER nextjs
 EXPOSE 3000
