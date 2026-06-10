@@ -6,6 +6,15 @@ behaviour by neighbourhood, gender and quarter.
 
 Built for the Horatio Data Engineering take-home challenge.
 
+**Live deployment:** https://horatio-analytics-production.up.railway.app
+([health probe](https://horatio-analytics-production.up.railway.app/api/health) ·
+[OpenAPI spec](https://horatio-analytics-production.up.railway.app/api/openapi) ·
+[dashboard](https://horatio-analytics-production.up.railway.app/)).
+
+The compute runs on Railway, the database is hosted Postgres on
+[Neon](https://neon.tech) — see [§10 Deployment](#10-deployment) for the
+rationale.
+
 ---
 
 ## 1. Stack and rationale
@@ -430,8 +439,25 @@ exposing the API to anything other than `localhost`)
 
 ## 10. Deployment
 
-The Dockerfile produces a self-contained Next.js standalone server suitable for
-any container host (Railway, Fly, Render, Vercel container deploy, GCP Cloud
-Run, …). Set `DATABASE_URL` and the container will boot.
+The live deployment runs on **Railway** (compute) + **Neon** (Postgres) —
+split intentionally so the database can scale independently of the
+serverless container and uses the platform best suited to each tier.
 
-A live URL, if deployed, will be added at the top of this README.
+- **Compute on Railway** — Railway picks up the `Dockerfile` directly,
+  no Nixpacks, no extra config. The standalone Next.js bundle drops the
+  cold start under a second.
+- **Postgres on Neon** — serverless Postgres with a generous free tier
+  and SSL by default. Neon hibernates after a few minutes of idle and
+  takes ~1s to wake on the first request — the first call to
+  `/api/health` after a quiet stretch is therefore slower than steady
+  state.
+- **Schema bootstrap is automatic.** The Next.js 15 instrumentation
+  hook (`instrumentation.ts`) runs Drizzle's runtime migrator on every
+  cold start in production. A freshly-deployed container lands with
+  the schema already applied — no `docker exec`, no operator step.
+
+Reproducing the deployment elsewhere is the same recipe: any container
+host that runs the Dockerfile + any Postgres reachable from it. The
+relevant environment variables are `DATABASE_URL` (required) and the
+optional `SKIP_MIGRATIONS=1` (for smoke-testing against an existing
+schema).
